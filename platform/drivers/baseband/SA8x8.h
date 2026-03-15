@@ -95,3 +95,14 @@ uint16_t sa8x8_readAT1846Sreg(uint8_t reg);
 #endif
 
 #endif /* SA8x8_H */
+/**
+ * Set the SA868 frequency and bandwidth.
+ *
+ * @param tx_freq: transmit frequency in MHz (e.g., 446.5000).
+ * @param rx_freq: receive frequency in MHz.
+ * @param bw_25khz: 1 for 25kHz bandwidth, 0 for 12.5kHz.
+ * @param squelch: squelch level (0-8).
+ * @return 0 on success, an error code otherwise.
+ */
+int sa8x8_setFrequency(float tx_freq, float rx_freq, uint8_t bw_25khz, uint8_t squelch);
+

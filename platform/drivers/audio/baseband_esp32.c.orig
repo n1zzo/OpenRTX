@@ -1,0 +1,159 @@
+/***************************************************************************
+ *   Copyright (C) 2026 by Niccolò Izzo IU2KIN                            *
+ *                                                                         *
+ *   M17 baseband output using ESP32-S3 I2S with GDMA                     *
+ *   Outputs 4FSK baseband at 48 kHz to GPIO18 for SA8x8 FM modulator    *
+ ***************************************************************************/
+
+#include <zephyr/kernel.h>
+#include <zephyr/drivers/i2s.h>
+#include <zephyr/device.h>
+#include <zephyr/logging/log.h>
+#include <string.h>
+
+LOG_MODULE_REGISTER(baseband, LOG_LEVEL_INF);
+
+#define I2S_TX_NODE DT_NODELABEL(i2s0)
+
+static const struct device *i2s_dev = DEVICE_DT_GET(I2S_TX_NODE);
+static bool baseband_running = false;
+
+// Ping-pong buffers for continuous DMA streaming
+#define BUFFER_SIZE 960  // 20ms at 48kHz (960 samples)
+#define BUFFER_BYTES (BUFFER_SIZE * sizeof(int16_t))
+#define NUM_BUFFERS 16  // More buffers for continuous streaming    // Need at least 2 per I2S queue requirement
+
+static int16_t tx_buffer_0[BUFFER_SIZE];
+static int16_t tx_buffer_1[BUFFER_SIZE];
+static int current_buffer = 0;
+
+// Memory slab for I2S DMA buffers (required by driver)
+K_MEM_SLAB_DEFINE(i2s_tx_slab, BUFFER_BYTES, NUM_BUFFERS, 4);
+
+int baseband_init(void)
+{
+    if (!device_is_ready(i2s_dev)) {
+        LOG_ERR("I2S device not ready");
+        return -ENODEV;
+    }
+
+    // Configure I2S for 48 kHz mono output (M17 baseband rate)
+    struct i2s_config config = {
+        .word_size = 16,
+        .channels = 2,  // ESP32 I2S requires stereo                           // Mono
+        .format = I2S_FMT_DATA_FORMAT_I2S,
+        .options = I2S_OPT_BIT_CLK_MASTER | I2S_OPT_FRAME_CLK_MASTER,
+        .frame_clk_freq = 48000,                 // M17 baseband sample rate
+        .mem_slab = &i2s_tx_slab,                // Required by ESP32 I2S driver
+        .block_size = BUFFER_BYTES,
+        .timeout = 1000,
+    };
+
+    int ret = i2s_configure(i2s_dev, I2S_DIR_TX, &config);
+    if (ret < 0) {
+        LOG_ERR("Failed to configure I2S: %d", ret);
+        return ret;
+    }
+
+    memset(tx_buffer_0, 0, sizeof(tx_buffer_0));
+    memset(tx_buffer_1, 0, sizeof(tx_buffer_1));
+
+    LOG_INF("M17 baseband initialized: 48 kHz, 16-bit, GPIO18");
+    return 0;
+}
+
+int baseband_start(void)
+{
+    if (baseband_running) {
+        return 0;
+    }
+
+    // Write initial silence to prime the DMA
+    void *tx_block;
+    int ret = k_mem_slab_alloc(&i2s_tx_slab, &tx_block, K_MSEC(500));
+    if (ret < 0) {
+        LOG_ERR("Failed to allocate initial TX buffer: %d", ret);
+        return ret;
+    }
+    
+    memset(tx_block, 0, BUFFER_BYTES);
+    ret = i2s_write(i2s_dev, tx_block, BUFFER_BYTES);
+    if (ret < 0) {
+        LOG_ERR("Failed to write initial buffer: %d", ret);
+        k_mem_slab_free(&i2s_tx_slab, tx_block);
+        return ret;
+    }
+
+    ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
+    if (ret < 0) {
+        LOG_ERR("Failed to start I2S: %d", ret);
+        return ret;
+    }
+
+    baseband_running = true;
+    LOG_INF("M17 baseband started");
+    return 0;
+}
+
+int baseband_stop(void)
+{
+    if (!baseband_running) {
+        return 0;
+    }
+
+    int ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_STOP);
+    if (ret < 0) {
+        LOG_ERR("Failed to stop I2S: %d", ret);
+        return ret;
+    }
+
+    baseband_running = false;
+    LOG_INF("M17 baseband stopped");
+    return 0;
+}
+
+int baseband_write(const int16_t *samples, size_t count)
+{
+    if (!baseband_running || !samples || count == 0) {
+        return -EINVAL;
+    }
+
+    // Allocate buffer from memory slab
+    void *tx_block;
+    int ret = k_mem_slab_alloc(&i2s_tx_slab, &tx_block, K_MSEC(500));
+    if (ret < 0) {
+        LOG_ERR("Failed to allocate TX buffer: %d", ret);
+        return ret;
+    }
+
+    // Copy samples to allocated buffer
+    size_t samples_to_copy = (count < BUFFER_SIZE) ? count : BUFFER_SIZE;
+    memcpy(tx_block, samples, samples_to_copy * sizeof(int16_t));
+
+    // Zero-fill remainder if needed
+    if (samples_to_copy < BUFFER_SIZE) {
+        memset((uint8_t *)tx_block + (samples_to_copy * sizeof(int16_t)), 0,
+               (BUFFER_SIZE - samples_to_copy) * sizeof(int16_t));
+    }
+
+    // Write to I2S with DMA (ownership of tx_block transfers to driver)
+    ret = i2s_write(i2s_dev, tx_block, BUFFER_BYTES);
+    if (ret < 0) {
+        LOG_ERR("I2S write failed: %d", ret);
+        k_mem_slab_free(&i2s_tx_slab, tx_block);
+        return ret;
+    }
+
+    return samples_to_copy;
+}
+
+int16_t *baseband_get_buffer(void)
+{
+    // Return the idle buffer for M17Modulator to write to
+    return (current_buffer == 0) ? tx_buffer_1 : tx_buffer_0;
+}
+
+size_t baseband_get_buffer_size(void)
+{
+    return BUFFER_SIZE;
+}

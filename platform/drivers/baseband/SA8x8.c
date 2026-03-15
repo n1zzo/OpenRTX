@@ -346,3 +346,31 @@ uint16_t sa8x8_readAT1846Sreg(uint8_t reg)
 
     return value;
 }
+
+int sa8x8_setFrequency(float tx_freq, float rx_freq, uint8_t bw_25khz, uint8_t squelch)
+{
+    char buf[SA8X8_MSG_SIZE] = {0};
+
+    // AT+DMOSETGROUP=BW,TXF,RXF,TXCXCSS,SQ,RXCXCSS
+    // BW: 0=12.5kHz, 1=25kHz
+    // TXF, RXF: frequency in MHz (e.g., 446.5000)
+    // TXCXCSS, RXCXCSS: CTCSS/DCS code (0000 = none)
+    // SQ: squelch level (0-8)
+    uartPrint("AT+DMOSETGROUP=%d,%09.4f,%09.4f,0000,%d,0000\r\n",
+              bw_25khz, tx_freq, rx_freq, squelch);
+    
+    int ret = k_msgq_get(&uart_msgq, buf, K_MSEC(500));
+    if (ret != 0) {
+        printk("SA8x8: timeout waiting for frequency set response\n");
+        return ret;
+    }
+
+    // Check that response is "OK\r"
+    if (strncmp(buf, "OK\r", 3U) != 0) {
+        printk("SA8x8: failed to set frequency (response: %s)\n", buf);
+        return -1;
+    }
+
+    printk("SA8x8: frequency set to TX=%.4f RX=%.4f MHz\n", tx_freq, rx_freq);
+    return 0;
+}

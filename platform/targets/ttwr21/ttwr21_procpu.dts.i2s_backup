@@ -67,6 +67,16 @@
             bias-pull-up;
         };
     };
+    /* I2S for M17 baseband output on GPIO18 */
+    /* I2S pins: SD=GPIO18, WS=GPIO45, BCK=GPIO42 */
+    i2s0_default: i2s0_default {
+        group1 {
+            pinmux = <I2S0_O_SD_GPIO18>,
+                     <I2S0_O_WS_GPIO45>,
+                     <I2S0_O_BCK_GPIO42>;
+            output-enable;
+        };
+    };
 };
 
 &adc0 {
@@ -103,22 +113,6 @@
     };
 };
 
-/* I2S for M17 baseband output */
-&pinctrl {
-    i2s0_default: i2s0_default {
-        group1 {
-            pinmux = <I2S0_O_SD_GPIO18>,
-                     <I2S0_O_WS_GPIO45>,
-                     <I2S0_O_BCK_GPIO42>;
-            output-enable;
-        };
-    };
-};
 
-&i2s0 {
-    status = "okay";
-    pinctrl-0 = <&i2s0_default>;
-    pinctrl-names = "default";
-    dmas = <&dma 1>;
-    dma-names = "tx";
-};
+/* I2S for M17 baseband output with GDMA */
+/* I2S for M17 baseband output with GDMA */&i2s0 {    status = "okay";    pinctrl-0 = <&i2s0_default>;    pinctrl-names = "default";    dmas = <dmas = <&dma 0>;dma 1>;    dma-names = "tx";};

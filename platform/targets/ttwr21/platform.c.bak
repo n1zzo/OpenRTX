@@ -110,72 +110,6 @@ int8_t detect_band()
     }
 }
 
-
-// M17 Test - Minimal version using delayed work
-#include "drivers/audio/baseband_esp32.h"
-
-static volatile bool m17_shutdown_flag = false;
-static struct k_timer m17_timer;
-static struct k_work_delayable m17_work;
-
-static void m17_timer_expired(struct k_timer *timer)
-{
-    m17_shutdown_flag = true;
-    baseband_stop();
-    sa8x8_writeAT1846Sreg(0x30, sa8x8_readAT1846Sreg(0x30) & ~0x0060);
-    
-    const struct gpio_dt_spec ptt = {DEVICE_DT_GET(DT_NODELABEL(gpio1)), 9, GPIO_ACTIVE_HIGH};
-    const struct gpio_dt_spec mic = {DEVICE_DT_GET(DT_NODELABEL(gpio0)), 17, GPIO_ACTIVE_HIGH};
-    gpio_pin_set_dt(&ptt, 0);
-    gpio_pin_set_dt(&mic, 0);
-}
-
-static void m17_work_handler(struct k_work *work)
-{
-    m17_shutdown_flag = false;
-    k_timer_init(&m17_timer, m17_timer_expired, NULL);
-    
-    // Configure AT1846S for 145.375 MHz
-    sa8x8_writeAT1846Sreg(0x29, 35);
-    sa8x8_writeAT1846Sreg(0x2A, 32240);
-    sa8x8_writeAT1846Sreg(0x33, 0x45F6);
-    sa8x8_writeAT1846Sreg(0x15, 0x1100);
-    
-    // Configure GPIOs
-    struct gpio_dt_spec mic = {DEVICE_DT_GET(DT_NODELABEL(gpio0)), 17, GPIO_ACTIVE_HIGH};
-    struct gpio_dt_spec ptt = {DEVICE_DT_GET(DT_NODELABEL(gpio1)), 9, GPIO_ACTIVE_HIGH};
-    gpio_pin_configure_dt(&mic, GPIO_OUTPUT);
-    gpio_pin_configure_dt(&ptt, GPIO_OUTPUT);
-    gpio_pin_set_dt(&mic, 1);
-    gpio_pin_set_dt(&ptt, 1);
-    
-    // Enable TX
-    sa8x8_writeAT1846Sreg(0x30, (sa8x8_readAT1846Sreg(0x30) & ~0x0060) | (2 << 5));
-    
-    if (baseband_init() >= 0 && baseband_start() >= 0)
-    {
-        k_timer_start(&m17_timer, K_SECONDS(5), K_NO_WAIT);
-        
-        int16_t *buf = baseband_get_buffer();
-        
-        // Transmit M17 preamble for ~5 seconds
-        for (int i = 0; i < 250 && !m17_shutdown_flag; i++)
-        {
-            for (int j = 0; j < 960; j++)
-                buf[j] = ((j / 10) & 1) ? -3000 : 3000;
-            baseband_write(buf, 960);
-            k_msleep(15);
-        }
-    }
-}
-
-static void m17_test_init(void)
-{
-    k_work_init_delayable(&m17_work, m17_work_handler);
-    k_work_schedule(&m17_work, K_SECONDS(30));
-}
-
-
 void platform_init()
 {
     int ret;
@@ -294,9 +228,6 @@ void platform_init()
 
     // XXX: test ADC
     // start_adc_test();
-    
-    // Schedule M17 test
-    m17_test_init();
 }
 
 void platform_terminate()
@@ -419,128 +350,76 @@ const struct gpsDevice *platform_initGps()
 
     return &gps;
 }
+#include "drivers/audio/baseband_esp32.h"
 
-// ADC2 Timer ISR Demo - 5 Second Recording
-#include "drivers/ADC/adc_esp32.h"
-#include <zephyr/kernel.h>
-#include <zephyr/drivers/gpio.h>
-
-#define MIC_CH_SEL_GPIO 17  // GPIO17 controls mic channel select
-#define SAMPLE_RATE 8000     // Request 8 kHz for Codec2 MODE_3200
-#define RECORDING_SECONDS 1
-#define TOTAL_SAMPLES (SAMPLE_RATE * RECORDING_SECONDS)  // 40,000 samples
-#define CHUNK_SIZE 256  // Read 256 samples at a time
-
-static void adc_demo_thread(void *, void *, void *);
-
-K_THREAD_DEFINE(adc_demo_tid, 4096, adc_demo_thread, NULL, NULL, NULL, 7, 0, 0);
-
-static void adc_demo_thread(void *arg1, void *arg2, void *arg3)
+static void test_m17_output(void)
 {
-    ARG_UNUSED(arg1);
-    ARG_UNUSED(arg2);
-    ARG_UNUSED(arg3);
-
-    // Wait for system to stabilize
-    k_sleep(K_SECONDS(2));
-
-    printk("\n=== ADC2 Timer ISR - Mic Recording Demo ===\n");
-    printk("Recording %d seconds of audio at %d Hz\n", RECORDING_SECONDS, SAMPLE_RATE);
-    printk("Total samples: %d\n", TOTAL_SAMPLES);
-    printk("Streaming mode (no buffering)\n\n");
-
-    // Configure GPIO17 (MIC_CH_SEL) as output
-    const struct gpio_dt_spec mic_sel = {
-        .port = DEVICE_DT_GET(DT_NODELABEL(gpio0)),
-        .pin = MIC_CH_SEL_GPIO,
-        .dt_flags = GPIO_ACTIVE_HIGH
-    };
-
-    if (!device_is_ready(mic_sel.port)) {
-        printk("ERROR: GPIO device not ready\n");
+    printk("\n=== M17 Baseband Test ===\n");
+    printk("GPIO42 (BCK): Bit clock\n");
+    printk("GPIO45 (WS): Word select\n");
+    printk("GPIO18 (SD): Data output\n\n");
+    
+    if (baseband_init() < 0) {
+        printk("ERROR: Init failed\n");
         return;
     }
-
-    int ret = gpio_pin_configure_dt(&mic_sel, GPIO_OUTPUT_ACTIVE);
-    if (ret < 0) {
-        printk("ERROR: Failed to configure GPIO%d: %d\n", MIC_CH_SEL_GPIO, ret);
+    
+    if (baseband_start() < 0) {
+        printk("ERROR: Start failed\n");
         return;
     }
-
-    // Set MIC_CH_SEL HIGH
-    gpio_pin_set_dt(&mic_sel, 1);
-    printk("MIC_CH_SEL (GPIO17) set HIGH\n");
-
-    // Initialize ADC timer sampler
-    ret = adc_timer_init(SAMPLE_RATE);
-    if (ret != 0) {
-        printk("ERROR: ADC timer init failed: %d\n", ret);
-        return;
-    }
-
-    // Allocate buffer to store ALL samples (no printing during recording)
-    int16_t *all_samples = k_malloc(TOTAL_SAMPLES * sizeof(int16_t));
-    if (!all_samples) {
-        printk("ERROR: Failed to allocate sample buffer (%d samples = %d bytes)\n",
-               TOTAL_SAMPLES, TOTAL_SAMPLES * sizeof(int16_t));
-        adc_timer_stop();
-        return;
-    }
-
-    // Start ADC timer NOW - right before recording loop
-    ret = adc_timer_start();
-    if (ret != 0) {
-        printk("ERROR: ADC timer start failed: %d\n", ret);
-        k_free(all_samples);
-        return;
-    }
-
-        printk("*** RECORDING STARTED (collecting %d samples, buffer allocated) ***\n", TOTAL_SAMPLES);
-
-    size_t samples_recorded = 0;
-
-    // Fast recording loop - just read samples into buffer, NO printing
-    while (samples_recorded < TOTAL_SAMPLES) {
-        size_t available = adc_timer_get_available_count();
-
-        if (available > 0) {
-            size_t to_read = TOTAL_SAMPLES - samples_recorded;
-            if (to_read > available) {
-                to_read = available;
-            }
-
-            size_t read = adc_timer_read_samples(&all_samples[samples_recorded], to_read);
-            samples_recorded += read;
-        } else {
-            k_yield();
+    
+    printk("I2S started with test pattern in first buffer\n");
+    printk("Check GPIO18 for alternating +3000/-3000 pattern\n");
+    printk("This should appear as high-frequency square wave\n\n");
+    
+    // Wait to let initial buffer transmit
+    k_msleep(100);
+    
+    // Now send M17 preamble pattern
+    printk("Sending M17 preamble (192 symbols, 40ms)\n");
+    int16_t *buf = baseband_get_buffer();
+    
+    // Send 20 buffers of alternating +3/-3 pattern (M17 preamble style)
+    for (int i = 0; i < 20; i++) {
+        // Fill buffer: 10 samples per symbol at 48kHz for 4800 baud
+        for (int j = 0; j < 960; j++) {
+            int symbol_idx = j / 10;  // 10 samples per symbol
+            buf[j] = (symbol_idx & 1) ? -3000 : 3000;
         }
+        
+        int ret = -11;
+        int tries = 0;
+        while (ret == -11 && tries < 30) {
+            ret = baseband_write(buf, 960);
+            if (ret == -11) {
+                k_msleep(30);
+                tries++;
+            }
+        }
+        
+        if (ret < 0) {
+            printk("Write failed after %d buffers\n", i);
+            break;
+        }
+        
+        k_msleep(50);
     }
-
-    printk("*** RECORDING COMPLETE (%d samples captured) ***\n", samples_recorded);
-
-    // Stop ADC timer (will print statistics)
-    adc_timer_stop();
-
-    // Now print all samples offline (no time pressure)
-    printk("\n=== RAW AUDIO DATA (16-bit PCM, %d Hz, Mono) ===\n", SAMPLE_RATE);
-    printk("To convert: python3 hex_to_wav_fixed.py output.txt audio.wav [gain]\n\n");
-    printk("BEGIN_RAW_AUDIO_DATA\n");
-
-    uint16_t min_value = 0xFFFF;
-    uint16_t max_value = 0;
-
-    for (size_t i = 0; i < samples_recorded; i++) {
-        uint16_t val = (uint16_t)all_samples[i];
-        printk("%04X\n", val);
-        if (val < min_value) min_value = val;
-        if (val > max_value) max_value = val;
-    }
-
-    printk("END_RAW_AUDIO_DATA\n");
-    printk("\nADC value range: min=0x%04X (%u), max=0x%04X (%u)\n",
-           min_value, min_value, max_value, max_value);
-
-    printk("\n=== Recording demo complete ===\n");
-
-    k_free(all_samples);
+    
+    k_msleep(500);  // Let final buffers drain
+    
+    printk("\nTest complete\n");
+    baseband_stop();
 }
+
+static void demo_thread(void *a1, void *a2, void *a3)
+{
+    ARG_UNUSED(a1); ARG_UNUSED(a2); ARG_UNUSED(a3);
+    k_sleep(K_SECONDS(2));
+    
+    printk("\n=== M17 I2S Output Test ===\n");
+    test_m17_output();
+    printk("\nMeasure GPIO18 with oscilloscope\n");
+}
+
+K_THREAD_DEFINE(demo_tid, 4096, demo_thread, NULL, NULL, NULL, 7, 0, 0);

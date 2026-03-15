@@ -35,6 +35,7 @@ target_sources(app
     ${OPENRTX_ROOT}/platform/drivers/keyboard/keyboard_ttwr.c
     ${OPENRTX_ROOT}/platform/drivers/program/program_RL78.c
     ${OPENRTX_ROOT}/platform/drivers/ADC/adc_esp32.c
+        ${OPENRTX_ROOT}/platform/drivers/audio/baseband_esp32.c
 
     ${OPENRTX_ROOT}/platform/drivers/stubs/cps_io_stub.c
 
