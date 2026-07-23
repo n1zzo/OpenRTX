@@ -1,0 +1,29 @@
+[package]
+name = "openrtx-ui"
+version = "0.1.0"
+edition = "2021"
+authors = ["OpenRTX Team"]
+description = "GTK4 UI for OpenRTX"
+license = "GPL-3.0"
+repository = "https://github.com/openrtx-project/openrtx-ui"
+
+[dependencies]
+# GTK4 / Workbench
+gtk = { version = "0.7", features = ["v4_10", "graphene"] }
+libadwaita = "1.4"
+
+# FFI
+libc = "0.2"
+bindgen = "0.68"  # For generating bindings from C headers
+
+[build-dependencies]
+bindgen = "0.68"
+
+[features]
+default = ["wayland"]
+wayland = []
+x11 = ["gtk/x11"]
+
+[profile.release]
+opt-level = 2
+lto = true

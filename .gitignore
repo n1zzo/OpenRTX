@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Test binaries
+test_basic
+
+# Build directories
+build/
+target/
+
+# IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
